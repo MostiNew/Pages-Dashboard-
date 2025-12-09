@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pages Dashboard — Aggregated GitHub Pages Metrics</title>
+
+  <!-- CSS & libs -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#071021; --card:#0f1724; --muted:#9aa9b7; --text:#e6eef6; --accent:#4f9cff;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#03060a,var(--bg));color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
+    .container{max-width:1140px;padding:28px;}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border:1px solid rgba(255,255,255,0.03);}
+    .small-muted{color:var(--muted);font-size:0.85rem;}
+    .value{font-size:1.6rem;font-weight:700;color:var(--text);}
+    .repo-spark{height:36px;width:120px;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--text);}
+    .table thead th{border-bottom:1px solid rgba(255,255,255,0.04);color:var(--muted);}
+    .spinner{width:28px;height:28px;border:3px solid rgba(255,255,255,0.06);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    a.repo-link{color:var(--text);text-decoration:none}
+    footer{margin-top:18px;color:var(--muted);font-size:0.85rem;text-align:center;}
+    .card .muted{color:var(--muted);font-size:0.9rem}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="d-flex align-items-center justify-content-between mb-4">
+      <div>
+        <h1 style="margin:0;font-weight:600">GitHub Pages Dashboard</h1>
+        <div class="small-muted">Views & unique visitors across your page repos (last 14 days)</div>
+      </div>
+
+      <div class="d-flex gap-2 align-items-center">
+        <div class="form-check form-switch me-2">
+          <input class="form-check-input" type="checkbox" id="autoRefresh" />
+          <label class="form-check-label small-muted" for="autoRefresh">Auto refresh</label>
+        </div>
+        <button id="refreshBtn" class="btn btn-sm btn-ghost">Refresh</button>
+        <a id="downloadAll" class="btn btn-sm btn-outline-light" download="all-traffic.json">Export JSON</a>
+      </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="row g-3 mb-4" id="summaryRow">
+      <div class="col-md-4">
+        <div class="card p-3">
+          <div class="small-muted">Total Page Views</div>
+          <div id="totalViews" class="value">—</div>
+          <div class="muted mt-1">Sum of 'count' across all repos</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3">
+          <div class="small-muted">Unique Visitors</div>
+          <div id="totalUniques" class="value">—</div>
+          <div class="muted mt-1">Sum of 'uniques' across all repos</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-3">
+          <div class="small-muted">Monitored Repos</div>
+          <div id="repoCount" class="value">—</div>
+          <div class="muted mt-1">Public repos with traffic.json</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="row g-3 mb-4">
+      <div class="col-lg-7">
+        <div class="card p-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="small-muted">Views by Repo (latest total)</div>
+            <div class="small-muted">Snapshot</div>
+          </div>
+          <canvas id="barChart" height="170"></canvas>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card p-3">
+          <div class="small-muted mb-2">Combined Daily Views (last 14 days)</div>
+          <canvas id="lineChart" height="170"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Repo list / table -->
+    <div class="card p-3 mb-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div><strong>Repos</strong> <span class="small-muted">(click repo name to open page)</span></div>
+        <div class="d-flex gap-2">
+          <input id="filterInput" class="form-control form-control-sm" placeholder="Filter repos..." style="min-width:220px">
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-borderless align-middle" id="repoTable">
+          <thead>
+            <tr>
+              <th style="width:38%">Repo / Page</th>
+              <th style="width:20%">Views</th>
+              <th style="width:16%">Uniques</th>
+              <th style="width:16%">Last Day</th>
+              <th style="width:10%">Spark</th>
+            </tr>
+          </thead>
+          <tbody id="repoTbody">
+            <tr><td colspan="5" class="text-center small-muted py-4"><div class="spinner mx-auto"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer>Note: GitHub traffic API returns only the last 14 days. For geolocation or longer history use GA4 or store historical snapshots via Actions. </footer>
+  </div>
+
+<script>
+/* ----------------------
+   CONFIG: list your repos
+   ----------------------
+   Each item must point to the raw traffic.json on the repo's main branch.
+   Example:
+     "https://raw.githubusercontent.com/mostischmidbauer/Verifier/main/traffic.json"
+*/
+const REPOS = [
+  {
+    name: "Verifier",
+    repoUrl: "https://raw.githubusercontent.com/mostischmidbauer/Verifier/main/traffic.json",
+    pageUrl: "https://mostischmidbauer.github.io/Verifier/"
+  },
+  {
+    name: "ANCHOR",
+    repoUrl: "https://raw.githubusercontent.com/mostischmidbauer/ANCHOR/main/traffic.json",
+    pageUrl: "https://mostischmidbauer.github.io/ANCHOR/"
+  },
+  {
+    name: "ROM Tracker",
+    repoUrl: "https://raw.githubusercontent.com/mostinew/rom-tracker/main/traffic.json",
+    pageUrl: "https://mostinew.github.io/rom-tracker/"
+  }
+];
+
+/* ----------------------
+   End config
+   ---------------------- */
+
+const DEFAULT_TIMEOUT = 12000; // ms
+let cachedData = [];
+let autoRefreshInterval = null;
+
+// small helpers
+const el = id => document.getElementById(id);
+const formatDate = d => new Date(d).toLocaleString();
+
+async function fetchWithTimeout(url, ms = DEFAULT_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+/* --- Charts --- */
+let barChart = null, lineChart = null;
+function createOrUpdateBar(labels, values) {
+  const ctx = el('barChart').getContext('2d');
+  if (barChart) { barChart.data.labels = labels; barChart.data.datasets[0].data = values; barChart.update(); return; }
+  barChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label: 'Views', data: values, backgroundColor: undefined }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+function createOrUpdateLine(labels, values) {
+  const ctx = el('lineChart').getContext('2d');
+  if (lineChart) { lineChart.data.labels = labels; lineChart.data.datasets[0].data = values; lineChart.update(); return; }
+  lineChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{ label: 'Combined Views', data: values, fill: true, tension: 0.25 }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+
+/* --- Load & render --- */
+async function loadAll() {
+  // reset UI
+  el('repoTbody').innerHTML = '<tr><td colspan="5" class="text-center small-muted py-4"><div class="spinner mx-auto"></div></td></tr>';
+  el('totalViews').innerText = '—'; el('totalUniques').innerText = '—';
+  el('repoCount').innerText = REPOS.length;
+
+  const results = [];
+  for (const repo of REPOS) {
+    try {
+      const data = await fetchWithTimeout(repo.repoUrl);
+      // validate shape (traffic.json expected keys)
+      if (typeof data.count !== 'number' || typeof data.uniques !== 'number' || !Array.isArray(data.views)) {
+        throw new Error('Unexpected JSON shape');
+      }
+      results.push({ ok: true, name: repo.name, pageUrl: repo.pageUrl, url: repo.repoUrl, data, fetchedAt: new Date().toISOString() });
+    } catch (err) {
+      results.push({ ok: false, name: repo.name, pageUrl: repo.pageUrl, url: repo.repoUrl, error: err.message || String(err), fetchedAt: new Date().toISOString() });
+    }
+  }
+
+  cachedData = results;
+  renderTable(results);
+  renderSummaryAndCharts(results);
+
+  // prepare download link
+  const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+  const u = URL.createObjectURL(blob);
+  el('downloadAll').href = u;
+}
+
+function renderTable(results) {
+  const filter = (el('filterInput').value || '').toLowerCase();
+  const rows = results
+    .filter(r => r.name.toLowerCase().includes(filter) || (r.pageUrl||'').toLowerCase().includes(filter))
+    .map(r => {
+      if (!r.ok) {
+        return `<tr>
+          <td><a class="repo-link" href="${escapeHtml(r.pageUrl || '#')}" target="_blank">${escapeHtml(r.name)}</a></td>
+          <td colspan="2" class="small-muted">Failed: ${escapeHtml(r.error)}</td>
+          <td class="small-muted">${escapeHtml(r.fetchedAt)}</td>
+          <td></td>
+        </tr>`;
+      }
+      const views = r.data.count ?? 0;
+      const uniques = r.data.uniques ?? 0;
+      const lastDay = (r.data.views && r.data.views.length) ? r.data.views[r.data.views.length - 1].timestamp : '';
+      // sparkline: use small inline chart canvas with data points
+      const sparkData = (r.data.views || []).map(v => v.count).slice(-14);
+      const sparkId = 'spark-' + Math.random().toString(36).slice(2,9);
+      return `<tr data-name="${escapeHtml(r.name)}" class="repo-row">
+        <td><a class="repo-link" href="${escapeHtml(r.pageUrl)}" target="_blank">${escapeHtml(r.name)}</a></td>
+        <td><strong>${views}</strong></td>
+        <td>${uniques}</td>
+        <td class="small-muted">${ lastDay ? new Date(lastDay).toLocaleString() : escapeHtml(r.fetchedAt) }</td>
+        <td style="vertical-align:middle"><canvas id="${sparkId}" class="repo-spark"></canvas>
+            <script type="application/json" data-spark="${sparkId}">${JSON.stringify(sparkData)}</script>
+        </td>
+      </tr>`;
+    }).join('');
+
+  el('repoTbody').innerHTML = rows || `<tr><td colspan="5" class="text-center small-muted py-4">No repos match the filter</td></tr>`;
+
+  // render sparklines after DOM insertion
+  document.querySelectorAll('script[data-spark]').forEach(s => {
+    try {
+      const sparkId = s.getAttribute('data-spark');
+      const data = JSON.parse(s.textContent || '[]');
+      const ctx = document.getElementById(sparkId).getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: { labels: data.map((_,i)=>i+1), datasets: [{ data, fill: true, tension: 0.3, pointRadius:0 }]},
+        options: { responsive: true, plugins:{legend:{display:false}}, scales:{x:{display:false}, y:{display:false}} }
+      });
+    } catch(e) { /* ignore sparkline errors */ }
+  });
+}
+
+function renderSummaryAndCharts(results) {
+  const success = results.filter(r => r.ok && r.data);
+  const totalViews = success.reduce((s,r) => s + (r.data.count||0), 0);
+  const totalUniques = success.reduce((s,r) => s + (r.data.uniques||0), 0);
+  el('totalViews').innerText = totalViews;
+  el('totalUniques').innerText = totalUniques;
+  el('repoCount').innerText = results.length;
+
+  const barLabels = success.map(r => r.name);
+  const barValues = success.map(r => r.data.count || 0);
+  createOrUpdateBar(barLabels, barValues);
+
+  // generate last 14 ISO dates
+  const days = generateLastNDates(14);
+  const combined = days.map(d => success.reduce((acc, r) => {
+    const found = (r.data.views || []).find(v => v.timestamp.startsWith(d));
+    return acc + (found ? found.count : 0);
+  }, 0));
+  createOrUpdateLine(days, combined);
+}
+
+function generateLastNDates(n) {
+  const arr = [];
+  for (let i = n-1; i >= 0; --i) {
+    const dt = new Date();
+    dt.setDate(dt.getDate() - i);
+    arr.push(dt.toISOString().slice(0,10));
+  }
+  return arr;
+}
+function escapeHtml(s) { return String(s || '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* --- events --- */
+el('refreshBtn').addEventListener('click', () => loadAll());
+el('filterInput').addEventListener('input', () => renderTable(cachedData));
+el('autoRefresh').addEventListener('change', (e) => {
+  if (e.target.checked) {
+    // refresh every 5 minutes
+    autoRefreshInterval = setInterval(loadAll, 300000);
+  } else {
+    clearInterval(autoRefreshInterval);
+    autoRefreshInterval = null;
+  }
+});
+
+/* initial */
+if (REPOS.length === 0) {
+  el('repoTbody').innerHTML = `<tr><td colspan="5" class="text-center small-muted py-4">No repos configured — edit REPOS in the top of this file.</td></tr>`;
+  el('repoCount').innerText = 0;
+  el('totalViews').innerText = 0;
+  el('totalUniques').innerText = 0;
+} else {
+  loadAll();
+}
+</script>
+</body>
+</html>
